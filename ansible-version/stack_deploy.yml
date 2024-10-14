@@ -1,0 +1,116 @@
+---
+- hosts: localhost
+  become: true
+  vars:
+    workdir: "{{ ansible_env.HOME }}/docker"
+    nextcloud_dir: "{{ workdir }}/nextcloud"
+    nginx_proxy_manager_dir: "{{ workdir }}/nginx-proxy-manager"
+    portainer_dir: "{{ workdir }}/portainer"
+    mysql_password: "password"
+    
+  tasks:
+    - name: Crea directorios para las instancias
+      file:
+        path: "{{ item }}"
+        state: directory
+      loop:
+        - "{{ nextcloud_dir }}"
+        - "{{ nginx_proxy_manager_dir }}"
+        - "{{ portainer_dir }}"
+
+    - name: Crea docker-compose para Nextcloud
+      copy:
+        dest: "{{ nextcloud_dir }}/docker-compose.yml"
+        content: |
+          version: '3'
+          services:
+            nextcloud:
+              image: nextcloud
+              container_name: nextcloud
+              ports:
+                - "8080:80"
+              volumes:
+                - nextcloud_data:/var/www/html
+              environment:
+                - MYSQL_PASSWORD={{ mysql_password }}
+                - MYSQL_DATABASE=nextcloud
+                - MYSQL_USER=nextcloud
+                - MYSQL_HOST=db
+              depends_on:
+                - db
+
+            db:
+              image: mariadb
+              container_name: nextcloud_db
+              environment:
+                - MYSQL_ROOT_PASSWORD={{ mysql_password }}
+              volumes:
+                - db_data:/var/lib/mysql
+          volumes:
+            nextcloud_data:
+            db_data:
+
+    - name: Crea docker-compose para Nginx Proxy Manager
+      copy:
+        dest: "{{ nginx_proxy_manager_dir }}/docker-compose.yml"
+        content: |
+          version: '3'
+          services:
+            app:
+              image: 'jc21/nginx-proxy-manager:latest'
+              container_name: nginx_proxy_manager
+              restart: unless-stopped
+              ports:
+                - '80:80'
+                - '81:81'
+                - '443:443'
+              environment:
+                DB_MYSQL_HOST: "db"
+                DB_MYSQL_PORT: 3306
+                DB_MYSQL_USER: "npm"
+                DB_MYSQL_PASSWORD: "{{ mysql_password }}"
+                DB_MYSQL_NAME: "npm"
+              volumes:
+                - ./data:/data
+                - ./letsencrypt:/etc/letsencrypt
+              depends_on:
+                - db
+
+            db:
+              image: mariadb:latest
+              container_name: nginx_proxy_manager_db
+              environment:
+                MYSQL_ROOT_PASSWORD: "{{ mysql_password }}"
+                MYSQL_DATABASE: 'npm'
+                MYSQL_USER: 'npm'
+                MYSQL_PASSWORD: "{{ mysql_password }}"
+              volumes:
+                - ./db:/var/lib/mysql
+
+    - name: Crea docker-compose para Portainer
+      copy:
+        dest: "{{ portainer_dir }}/docker-compose.yml"
+        content: |
+          version: '3'
+          services:
+            portainer:
+              image: portainer/portainer-ce
+              container_name: portainer
+              restart: always
+              command: -H unix:///var/run/docker.sock
+              volumes:
+                - /var/run/docker.sock:/var/run/docker.sock
+                - portainer_data:/data
+              ports:
+                - "9000:9000"
+          volumes:
+            portainer_data:
+
+    - name: Desplega Nextcloud
+      shell: docker-compose -f "{{ nextcloud_dir }}/docker-compose.yml" up -d
+
+    - name: Desplega Nginx Proxy Manager
+      shell: docker-compose -f "{{ nginx_proxy_manager_dir }}/docker-compose.yml" up -d
+
+    - name: Desplega Portainer
+      shell: docker-compose -f "{{ portainer_dir }}/docker-compose.yml" up -d
